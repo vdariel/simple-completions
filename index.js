@@ -1,33 +1,68 @@
-const axios = require('axios')
+import axios from 'axios'
+import redis from 'redis'
+import dotenv from 'dotenv'
 
-const API_KEY = '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'
-const GPT_API_URL = 'https://api.openai.com/v1/engines/davinci-codex/completions'
+dotenv.config()
 
-async function askGPT(question) {
-  try {
-    const response = await axios.post(GPT_API_URL, {
-      prompt: question,
-      max_tokens: 100,
-      temperature: 0.7,
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + API_KEY,
-      }
-    })
+const API_KEY = process.env.API_KEY
+const GPT_API_URL = process.env.GPT_API_URL
 
-    return response.data.choices[0].text.trim()
-  } catch (error) {
-    console.error('Error calling GPT API: ', error)
-    throw error
-  }
+async function askGPT(messages) {
+  const response = await axios.post(GPT_API_URL, {
+    messages: messages,
+    model: 'gpt-3.5-turbo',
+    max_tokens: 100,
+    temperature: 0.7,
+  }, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + API_KEY,
+    }
+  })
+
+  return response.data.choices[0];
 }
 
-const question = 'What is the capital of France?'
-askGPT(question)
-  .then((answer) => {
-    console.log('GPT AI Response: ', answer)
-  })
-  .catch((error) => {
-    console.log('Error', error)
-  })
+async function askGPTUntilComplete(question) {
+  const messages = [
+    { role: 'user', content: question }
+  ]
+
+  let response = { finish_reason: 'stop' }
+
+  do {
+    response = await askGPT(messages)
+    console.log(response.message.content);
+    messages.push(response.message)
+  } while (response.finish_reason !== 'stop')
+}
+
+const client = redis.createClient({
+  url: 'redis://localhost:6379'
+})
+
+client.connect().then(async (data) => {
+  const lastTime = await client.get('last_time');
+  const executeChatGPT = () => {
+    askGPTUntilComplete('Between Sequalize, Prisma and Typeorm which one is the best orm for nodeJs?').then(() => {
+      client.set('last_time', new Date().getTime())
+      client.quit()
+    })
+  }
+
+  if (!lastTime) {
+    executeChatGPT()
+  } else {
+    const now = new Date().getTime()
+    const savedDate = new Date()
+    savedDate.setTime(lastTime)
+
+    if (now - savedDate.getTime() < 25000) {
+      console.log('You just can make 3 request per minute to ChatGPT API')
+      client.quit()
+      return
+    }
+
+    executeChatGPT()
+  }
+}).catch(error => console.log(error))
